@@ -177,11 +177,6 @@ async function aplicarPermissoes(channel, overwrites) {
 
 function getNextTicketNumber() {
   let maxNum = 0;
-  if (ticketsData && Array.isArray(ticketsData)) {
-    for (const t of ticketsData) {
-      if (t.ticketNum && t.ticketNum > maxNum) maxNum = t.ticketNum;
-    }
-  }
   for (const [, t] of ticketsAtivos.entries()) {
     if (t.ticketNum && t.ticketNum > maxNum) maxNum = t.ticketNum;
   }
