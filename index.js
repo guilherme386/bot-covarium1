@@ -155,24 +155,82 @@ function getStaffOverwrites() {
 }
 
 function getMemberOverwrites() {
-    return config.member_roles.map(roleId => ({
-        id: roleId,
-        deny: [PermissionFlagsBits.ViewChannel],
-        allow: []
-    }));
+  return config.member_roles.map(roleId => ({
+    id: roleId,
+    deny: [PermissionFlagsBits.ViewChannel],
+    allow: []
+  }));
 }
 
 async function aplicarPermissoes(channel, overwrites) {
-    for (const ow of overwrites) {
-        try {
-            await channel.permissionOverwrites.create(ow.id, {
-                allow: ow.allow || [],
-                deny: ow.deny || []
-            });
-        } catch (e) {
-            console.error(`⚠️ Permissão ignorada para ${ow.id}: ${e.message}`);
-        }
+  for (const ow of overwrites) {
+    try {
+      await channel.permissionOverwrites.create(ow.id, {
+        allow: ow.allow || [],
+        deny: ow.deny || []
+      });
+    } catch (e) {
+      console.error(`⚠️ Permissão ignorada para ${ow.id}: ${e.message}`);
     }
+  }
+}
+
+function getNextTicketNumber() {
+  let maxNum = 0;
+  if (ticketsData && Array.isArray(ticketsData)) {
+    for (const t of ticketsData) {
+      if (t.ticketNum && t.ticketNum > maxNum) maxNum = t.ticketNum;
+    }
+  }
+  for (const [, t] of ticketsAtivos.entries()) {
+    if (t.ticketNum && t.ticketNum > maxNum) maxNum = t.ticketNum;
+  }
+  return maxNum + 1;
+}
+
+async function criarEGerenciarAcessoTicket(channel, guild, ticketOwnerId) {
+  const ticketNum = getNextTicketNumber();
+  const roleName = `Atendimento #${ticketNum}`;
+  let ticketRole;
+  try {
+    ticketRole = await guild.roles.create({
+      name: roleName,
+      color: 'Blurple',
+      reason: `Cargo automático para ticket #${ticketNum}`
+    });
+  } catch (e) {
+    console.error(`⚠️ Erro ao criar cargo do ticket:`, e.message);
+    return null;
+  }
+  try {
+    await channel.permissionOverwrites.create(ticketRole, {
+      allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.ReadMessageHistory, PermissionFlagsBits.SendMessages],
+      deny: []
+    });
+  } catch (e) {
+    console.error(`⚠️ Erro ao definir permissões do cargo no canal:`, e.message);
+  }
+  try {
+    const member = await guild.members.fetch(ticketOwnerId);
+    if (member) await member.roles.add(ticketRole);
+  } catch (e) {
+    console.error(`⚠️ Erro ao dar cargo ao usuário do ticket:`, e.message);
+  }
+  for (const roleId of config.staff_roles) {
+    try {
+      const staffRole = guild.roles.cache.get(roleId);
+      if (staffRole) {
+        for (const member of staffRole.members.values()) {
+          await member.roles.add(ticketRole).catch(() => {});
+        }
+      }
+    } catch {}
+  }
+  try {
+    const botMember = guild.members.me;
+    if (botMember) await botMember.roles.add(ticketRole).catch(() => {});
+  } catch {}
+  return { roleId: ticketRole.id, ticketNum };
 }
 
 // ─────────────────────────────────────────────
@@ -482,23 +540,34 @@ if (content.startsWith('!staff')) {
         return message.reply('❌ Use: `!member add @role`, `!member remove @role`, ou `!member list`');
     }
 
-  // COMANDO !close / !fechar
-  if (content === '!close' || content === '!fechar') {
-    const isTicket = ticketsAtivos.has(message.channel.id);
-    if (!isTicket) return;
+// COMANDO !close / !fechar
+if (content === '!close' || content === '!fechar') {
+  const isTicket = ticketsAtivos.has(message.channel.id);
+  if (!isTicket) return;
 
-    ticketsAtivos.delete(message.channel.id);
-    conversationHistory.delete(message.channel.id);
-    salvarTickets();
+  const ticket = ticketsAtivos.get(message.channel.id);
+  ticketsAtivos.delete(message.channel.id);
+  conversationHistory.delete(message.channel.id);
+  salvarTickets();
 
-    const embed = new EmbedBuilder()
-      .setColor(COR_ERRO)
-      .setTitle('🔒 Canal Sendo Encerrado')
-      .setDescription('O canal será excluído permanentemente em 5 segundos...');
-
-    await message.reply({ embeds: [embed] });
-    setTimeout(() => { if (message.channel) message.channel.delete().catch(() => {}); }, 5000);
+  if (ticket?.ticketRoleId) {
+    const guild = message.guild;
+    if (guild) {
+      try {
+        const role = guild.roles.cache.get(ticket.ticketRoleId);
+        if (role) await role.delete().catch(() => {});
+      } catch {}
+    }
   }
+
+  const embed = new EmbedBuilder()
+    .setColor(COR_ERRO)
+    .setTitle('🔒 Canal Sendo Encerrado')
+    .setDescription('O canal será excluído permanentemente em 5 segundos...');
+
+  await message.reply({ embeds: [embed] });
+  setTimeout(() => { if (message.channel) message.channel.delete().catch(() => {}); }, 5000);
+}
 
   // INTEGRAÇÃO COM IA — responde APENAS em loja e suporte_ia (NUNCA em suporte humano)
   const ticket = ticketsAtivos.get(message.channel.id);
@@ -603,26 +672,29 @@ client.on('interactionCreate', async (interaction) => {
                 await replyE(interaction, '⏳ Criando sua loja privada, aguarde...');
 
                 // Criar canal de texto privado com chat travado para o cliente
-                const channel = await guild.channels.create({
-                    name: `🛒-loja-${user.username}`,
-                    type: ChannelType.GuildText
-                });
+const channel = await guild.channels.create({
+  name: `🛒-loja-${user.username}`,
+  type: ChannelType.GuildText
+});
 
-                // Aplicar permissões uma por uma pra não falhar tudo se um cargo der erro
-                await aplicarPermissoes(channel, [
-                    { id: guild.id, deny: [PermissionFlagsBits.ViewChannel], allow: [] },
-                    { id: user.id, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.ReadMessageHistory], deny: [PermissionFlagsBits.SendMessages] },
-                    ...getMemberOverwrites(),
-                    ...getStaffOverwrites()
-                ]);
+// Aplicar permissões uma por uma pra não falhar tudo se um cargo der erro
+await aplicarPermissoes(channel, [
+  { id: guild.id, deny: [PermissionFlagsBits.ViewChannel], allow: [] },
+  { id: user.id, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.ReadMessageHistory, PermissionFlagsBits.SendMessages], deny: [] },
+  ...getStaffOverwrites()
+]);
 
-                // Salvar dados
-                ticketsAtivos.set(channel.id, {
-                    userId: user.id,
-                    state: 'loja',
-                    selectedProductId: null
-                });
-                salvarTickets();
+const ticketInfo = await criarEGerenciarAcessoTicket(channel, guild, user.id);
+
+// Salvar dados
+ticketsAtivos.set(channel.id, {
+  userId: user.id,
+  state: 'loja',
+  selectedProductId: null,
+  ticketRoleId: ticketInfo?.roleId || null,
+  ticketNum: ticketInfo?.ticketNum || 0
+});
+salvarTickets();
 
                 // Enviar Vitrine Inicial
                 await enviarVitrine(channel, user);
@@ -656,29 +728,32 @@ client.on('interactionCreate', async (interaction) => {
                     return await replyE(interaction, '❌ Você já possui um atendimento aberto em: ' + canalExistente);
                 }
 
-                await replyE(interaction, '⏳ Criando seu canal de suporte, aguarde...');
+await replyE(interaction, '⏳ Criando seu canal de suporte, aguarde...');
 
-                const channel = await guild.channels.create({
-                    name: 'suporte-' + user.username,
-                    type: ChannelType.GuildText
-                });
+const channel = await guild.channels.create({
+  name: 'suporte-' + user.username,
+  type: ChannelType.GuildText
+});
 
-                // Aplicar permissões uma por uma pra não falhar tudo se um cargo der erro
-                await aplicarPermissoes(channel, [
-                    { id: guild.id, deny: [PermissionFlagsBits.ViewChannel], allow: [] },
-                    { id: user.id, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.ReadMessageHistory, PermissionFlagsBits.SendMessages], deny: [] },
-                    ...getMemberOverwrites(),
-                    ...getStaffOverwrites()
-                ]);
+// Aplicar permissões uma por uma pra não falhar tudo se um cargo der erro
+await aplicarPermissoes(channel, [
+  { id: guild.id, deny: [PermissionFlagsBits.ViewChannel], allow: [] },
+  { id: user.id, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.ReadMessageHistory, PermissionFlagsBits.SendMessages], deny: [] },
+  ...getStaffOverwrites()
+]);
 
-                ticketsAtivos.set(channel.id, {
-                    userId: user.id,
-                    state: 'suporte',
-                    selectedProductId: null
-                });
-                salvarTickets();
+const ticketInfo = await criarEGerenciarAcessoTicket(channel, guild, user.id);
 
-                await limparMensagensDoBot(channel);
+ticketsAtivos.set(channel.id, {
+  userId: user.id,
+  state: 'suporte',
+  selectedProductId: null,
+  ticketRoleId: ticketInfo?.roleId || null,
+  ticketNum: ticketInfo?.ticketNum || 0
+});
+salvarTickets();
+
+await limparMensagensDoBot(channel);
 
                 const ment = await pingarSuporte(guild);
 
@@ -739,19 +814,22 @@ client.on('interactionCreate', async (interaction) => {
     type: ChannelType.GuildText
   });
 
-  await aplicarPermissoes(channel, [
-    { id: guild.id, deny: [PermissionFlagsBits.ViewChannel], allow: [] },
-    { id: user.id, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.ReadMessageHistory, PermissionFlagsBits.SendMessages], deny: [] },
-    ...getMemberOverwrites(),
-    ...getStaffOverwrites()
-  ]);
+await aplicarPermissoes(channel, [
+  { id: guild.id, deny: [PermissionFlagsBits.ViewChannel], allow: [] },
+  { id: user.id, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.ReadMessageHistory, PermissionFlagsBits.SendMessages], deny: [] },
+  ...getStaffOverwrites()
+]);
 
-  ticketsAtivos.set(channel.id, {
-    userId: user.id,
-    state: 'suporte_ia',
-    selectedProductId: null
-  });
-  salvarTickets();
+const ticketInfo = await criarEGerenciarAcessoTicket(channel, guild, user.id);
+
+ticketsAtivos.set(channel.id, {
+  userId: user.id,
+  state: 'suporte_ia',
+  selectedProductId: null,
+  ticketRoleId: ticketInfo?.roleId || null,
+  ticketNum: ticketInfo?.ticketNum || 0
+});
+salvarTickets();
 
   await limparMensagensDoBot(channel);
 
@@ -859,18 +937,29 @@ if (customId === 'btn_voltar_vitrine') {
 
 // 5. FECHAR TICKET / CANAL
 if (customId === 'ticket_close') {
+  const ticket = ticketsAtivos.get(interaction.channel.id);
   ticketsAtivos.delete(interaction.channel.id);
   conversationHistory.delete(interaction.channel.id);
   salvarTickets();
 
-                const embed = new EmbedBuilder()
-                    .setColor(COR_ERRO)
-                    .setTitle('🔒 Fechando Canal')
-                    .setDescription('Este canal de atendimento será excluído permanentemente em 5 segundos...');
+  if (ticket?.ticketRoleId) {
+    try {
+      const guild = interaction.guild;
+      if (guild) {
+        const role = guild.roles.cache.get(ticket.ticketRoleId);
+        if (role) await role.delete().catch(() => {});
+      }
+    } catch {}
+  }
 
-                await interaction.reply({ embeds: [embed] });
-                return setTimeout(() => { if (interaction.channel) interaction.channel.delete().catch(() => {}); }, 5000);
-            }
+  const embed = new EmbedBuilder()
+    .setColor(COR_ERRO)
+    .setTitle('🔒 Fechando Canal')
+    .setDescription('Este canal de atendimento será excluído permanentemente em 5 segundos...');
+
+  await interaction.reply({ embeds: [embed] });
+  return setTimeout(() => { if (interaction.channel) interaction.channel.delete().catch(() => {}); }, 5000);
+}
 
 // 6. PAGAR PIX
             if (action === 'pix') {
