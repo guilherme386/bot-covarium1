@@ -1,0 +1,30 @@
+[
+  {
+    "id": "prod_1",
+    "nome": "Cargo VIP Diamante",
+    "preco": 29.90,
+    "descricao": "Acesso a canais exclusivos e comandos especiais por 30 dias.",
+    "entrega": "Cargo: VIP Diamante"
+  },
+  {
+    "id": "prod_2",
+    "nome": "Bot Personalizado (Básico)",
+    "preco": 150.00,
+    "descricao": "Um bot simples com 5 comandos personalizados para seu servidor.",
+    "entrega": "Mensagem: Entraremos em contato para coletar os detalhes do seu bot!"
+  },
+  {
+    "id": "prod_3",
+    "nome": "Cargo VIP Ouro",
+    "preco": 20.90,
+    "descricao": "Vip .",
+    "entrega": "Mensagem: Agende sua consultoria aqui: https://calendly.com/sua-loja"
+  },
+  {
+    "id": "prod_4",
+    "nome": "Assinatura Premium (ETERNO)",
+    "preco": 150.00,
+    "descricao": "Acesso total ao nosso servidor e benefícios exclusivos por um mês.",
+    "entrega": "Mensagem: Link de convite e instruções de acesso enviadas automaticamente."
+  }
+]

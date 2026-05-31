@@ -1,0 +1,11 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "model": "openai/gpt-4o",
+  "provider": {
+    "openai": {
+      "options": {
+        "apiKey": "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"
+      }
+    }
+  }
+}
